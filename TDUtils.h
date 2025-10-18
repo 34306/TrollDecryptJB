@@ -7,6 +7,8 @@
 #include <mach-o/dyld_images.h>
 #include <fcntl.h>
 #include <mach/task_info.h>
+#include <spawn.h>
+#include <signal.h>
 
 #import <sys/sysctl.h>
 #import <UIKit/UIKit.h>
@@ -37,9 +39,12 @@ NSUInteger iconFormat(void);
 NSArray *sysctl_ps(void);
 void decryptApp(NSDictionary *app);
 void decryptAppWithPID(pid_t pid);
-void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version);
+void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t lldb_pid);
+pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid);
+void continueLLDBProcess(pid_t lldb_pid);
+void detachLLDB(pid_t lldb_pid);
 NSArray *decryptedFileList(void);
 NSString *docPath(void);
 void fetchLatestTrollDecryptVersion(void (^completionHandler)(NSString *version));
-void github_fetchLatedVersion(NSString *repo, void (^completionHandler)(NSString *latestVersion));
+// void github_fetchLatedVersion(NSString *repo, void (^completionHandler)(NSString *latestVersion));
 NSString *trollDecryptVersion(void);

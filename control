@@ -1,8 +1,10 @@
-Package: com.fiore.trolldecrypt
-Name: TrollDecrypt
-Version: 1.1
+Package: com.34306.trolldecryptjb
+Name: TrollDecryptJB
+Version: 1.3.0
 Architecture: iphoneos-arm
-Description: An awesome application!
-Maintainer: fiore
-Author: fiore
-Section: Utilities
+Description: Decrypt Appstore App that require higher iOS
+Maintainer: Little 34306
+Author: 34306, khanhduytran0
+Section: Applications
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 15.0), lldb
+

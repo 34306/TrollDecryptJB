@@ -357,9 +357,9 @@ int find_off_cryptid(const char *filePath) {
 			[self makeDirectories:encryptedImageFilenameStr];
 
             //0x1518
-            uint32_t aslr_slide = 0;
+            uint64_t aslr_slide = 0;
             get_image_size(imageAddress, targetTask, &aslr_slide);
-            NSLog(@"[trolldecrypt] aslr_slide= 0x%x", aslr_slide);
+            NSLog(@"[trolldecrypt] aslr_slide= 0x%llx", aslr_slide);
 
 			off_cryptid=find_off_cryptid(encryptedImageFilenameStr);
 
@@ -532,8 +532,8 @@ int find_off_cryptid(const char *filePath) {
         mach_msg_type_number_t size3 = PATH_MAX;
         uint8_t *fpath_addr = readProcessMemory(targetTask, (mach_vm_address_t) info[i].imageFilePath, &size3);
         
-        imageAddress = (struct mach_header *)info[i].imageLoadAddress;
-        const char *imageName = fpath_addr;
+        imageAddress = (mach_vm_address_t)info[i].imageLoadAddress;
+        const char *imageName = (const char *)fpath_addr;
 
         if(!imageName || !imageAddress)
 			continue;

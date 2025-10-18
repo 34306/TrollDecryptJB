@@ -87,10 +87,9 @@ void decryptApp(NSDictionary *app) {
         root.modalPresentationStyle = UIModalPresentationFullScreen;
     });
 
-    NSLog(@"[trolldecrypt] spawning thread to do decryption in background...");
+    NSLog(@"[trolldecrypt] decrypt...");
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSLog(@"[trolldecrypt] inside decryption thread.");
 
         NSString *bundleID = app[@"bundleID"];
         NSString *name = app[@"name"];
@@ -104,15 +103,35 @@ void decryptApp(NSDictionary *app) {
         NSLog(@"[trolldecrypt] executable: %@", executable);
         NSLog(@"[trolldecrypt] binaryName: %@", binaryName);
 
-        [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES];
-        sleep(1);
-
+        NSLog(@"[trolldecrypt] lldb --waitfor for '%@'...", binaryName);
+        pid_t lldb_pid = attachLLDBToProcessByName([binaryName UTF8String], -1);//-1 for unknown
+        
+        if (lldb_pid <= 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                errorController = [UIAlertController alertControllerWithTitle:@"Error: lldb" message:@"Failed to start lldb. Make sure lldb is installed." preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    [errorController dismissViewControllerAnimated:NO completion:nil];
+                    [kw removeFromSuperview];
+                    kw.hidden = YES;
+                }];
+                [errorController addAction:okAction];
+                [root presentViewController:errorController animated:YES completion:nil];
+            });
+            return;
+        }
+        
+        NSLog(@"[trolldecrypt] launch app and lldb force pause...");
+        [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:NO];
+        sleep(2); // Wait for lldb to catch the app
+        
+        // Get PID after lldb caught it
         pid_t pid = -1;
         NSArray *processes = sysctl_ps();
         for (NSDictionary *process in processes) {
             NSString *proc_name = process[@"proc_name"];
             if ([proc_name isEqualToString:binaryName]) {
                 pid = [process[@"pid"] intValue];
+                NSLog(@"[trolldecrypt] Found app PID: %d (paused by lldb)", pid);
                 break;
             }
         }
@@ -139,23 +158,97 @@ void decryptApp(NSDictionary *app) {
 
         NSLog(@"[trolldecrypt] pid: %d", pid);
 
-        bfinject_rocknroll(pid, name, version);
+        bfinject_rocknroll(pid, name, version, lldb_pid);
     });
 }
 
-void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version) {
-    NSLog(@"[trolldecrypt] Spawning thread to do decryption in the background...");
-    
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSLog(@"[trolldecrypt] Inside decryption thread");
+pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
+    NSLog(@"[trolldecrypt] Attaching lldb to executable: %s (PID: %d)", executableName, target_pid);
 
+    NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_attach.txt"];
+    NSString *scriptContent = [NSString stringWithFormat:
+        @"process attach --name %s --waitfor\n", executableName];
+    [scriptContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    
+    NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_output.log"];
+
+    pid_t lldb_pid = 0;
+    const char *lldb_path = "/var/jb/usr/bin/lldb"; //please edit to use auto scheme for rootful/roothide, i'm lazy and forgot to do it
+    const char *args[] = {
+        "lldb",
+        "-s", [scriptPath UTF8String],  // Source script file
+        NULL
+    };
+    
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, [logPath UTF8String], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, [logPath UTF8String], O_WRONLY | O_CREAT | O_APPEND, 0644);
+    
+    int status = posix_spawn(&lldb_pid, lldb_path, &actions, NULL, (char *const *)args, NULL);
+    posix_spawn_file_actions_destroy(&actions);
+    
+    if (status == 0) {
+        NSLog(@"[trolldecrypt] lldb spawned done, lldb PID: %d", lldb_pid);
+        NSLog(@"[trolldecrypt] lldb output: %@", logPath);
+        
+        sleep(2);
+        
+        // Verify lldb is still running
+        if (kill(lldb_pid, 0) == 0) {
+            NSLog(@"[trolldecrypt] lldb attached to '%s' (PID: %d)", executableName, target_pid);
+        } else {
+            NSLog(@"[trolldecrypt] lldb process died");
+            lldb_pid = 0;
+        }
+    } else {
+        NSLog(@"[trolldecrypt] fail to spawn lldb: %d", status);
+        lldb_pid = 0;
+    }
+    
+    return lldb_pid;
+}
+
+//i was trying to make sure the app is paused before killed, but not success... can anyone help!?
+void continueLLDBProcess(pid_t lldb_pid) {
+    if (lldb_pid <= 0) return;
+    
+    NSLog(@"[trolldecrypt] 'continue' to lldb (PID: %d)", lldb_pid);
+}
+
+// Detach lldb from process
+void detachLLDB(pid_t lldb_pid) {
+    if (lldb_pid > 0) {
+        NSLog(@"[trolldecrypt] Detaching lldb (PID: %d)", lldb_pid);
+
+        kill(lldb_pid, SIGTERM);
+        
+        sleep(1);
+      
+        if (kill(lldb_pid, 0) == 0) {
+            NSLog(@"[trolldecrypt] lldb still running, sending SIGKILL");
+            kill(lldb_pid, SIGKILL);
+        }
+        
+        NSLog(@"[trolldecrypt] lldb detached successfully");
+    }
+}
+
+void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t lldb_pid) {
+    NSLog(@"[trolldecrypt] decrypt...");
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{;
+        NSLog(@"[trolldecrypt] Process PID: %d, lldb PID: %d", pid, lldb_pid);
+
+		// Get full path
 		char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
-    	// int proc_pidpath(pid, pathbuf, sizeof(pathbuf));
         proc_pidpath(pid, pathbuf, sizeof(pathbuf));
 		const char *fullPathStr = pathbuf;
 
-
         NSLog(@"[trolldecrypt] fullPathStr: %s", fullPathStr);
+        NSLog(@"[trolldecrypt] Process is already PAUSED by lldb");
+        
         DumpDecrypted *dd = [[DumpDecrypted alloc] initWithPathToBinary:[NSString stringWithUTF8String:fullPathStr] appName:appName appVersion:version];
         if(!dd) {
             NSLog(@"[trolldecrypt] ERROR: failed to get DumpDecrypted instance");
@@ -185,14 +278,21 @@ void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version) {
             [root presentViewController:alertController animated:YES completion:nil];
         });
         
-        // Do the decryption
+        NSLog(@"[trolldecrypt] Starting decryption while process is paused...");
         [dd createIPAFile:pid];
+        NSLog(@"[trolldecrypt] Decryption complete!");
+
+        continueLLDBProcess(lldb_pid);
+        sleep(1); 
+
+        NSLog(@"[trolldecrypt] Detaching lldb...");
+        detachLLDB(lldb_pid);
 
         // Dismiss the alert box
         dispatch_async(dispatch_get_main_queue(), ^{
             [alertController dismissViewControllerAnimated:NO completion:nil];
 
-            doneController = [UIAlertController alertControllerWithTitle:@"Decryption Complete!" message:[NSString stringWithFormat:@"IPA file saved to:\n%@", [dd IPAPath]] preferredStyle:UIAlertControllerStyleAlert];
+            doneController = [UIAlertController alertControllerWithTitle:@"Decryption Complete!" message:[NSString stringWithFormat:@"IPA file saved to:\n%@\n\nThanks to lldb so we can archive this!", [dd IPAPath]] preferredStyle:UIAlertControllerStyleAlert];
 
             UIAlertAction *okAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"Ok") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                 [kw removeFromSuperview];
@@ -215,11 +315,9 @@ void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version) {
         }); // dispatch on main
                     
         NSLog(@"[trolldecrypt] Over and out.");
-        while(1)
-            sleep(9999999);
     }); // dispatch in background
     
-    NSLog(@"[trolldecrypt] All done, exiting constructor.");
+    NSLog(@"[trolldecrypt] All done.");
 }
 
 NSArray *decryptedFileList(void) {
@@ -260,12 +358,12 @@ NSArray *decryptedFileList(void) {
 
 NSString *docPath(void) {
     NSError * error = nil;
-    [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Library/TrollDecrypt/decrypted" withIntermediateDirectories:YES attributes:nil error:&error];
+    [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Documents/TrollDecrypt/decrypted" withIntermediateDirectories:YES attributes:nil error:&error];
     if (error != nil) {
         NSLog(@"[trolldecrypt] error creating directory: %@", error);
     }
 
-    return @"/var/mobile/Library/TrollDecrypt/decrypted";
+    return @"/var/mobile/Documents/TrollDecrypt/decrypted";
 }
 
 void decryptAppWithPID(pid_t pid) {
@@ -355,29 +453,29 @@ void decryptAppWithPID(pid_t pid) {
     });
 }
 
-void github_fetchLatedVersion(NSString *repo, void (^completionHandler)(NSString *latestVersion)) {
-    NSString *urlString = [NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest", repo];
-    NSURL *url = [NSURL URLWithString:urlString];
+// void github_fetchLatedVersion(NSString *repo, void (^completionHandler)(NSString *latestVersion)) {
+//     NSString *urlString = [NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest", repo];
+//     NSURL *url = [NSURL URLWithString:urlString];
 
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (!error) {
-            if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
-                NSError *jsonError;
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+//     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+//         if (!error) {
+//             if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+//                 NSError *jsonError;
+//                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
 
-                if (!jsonError) {
-                    NSString *version = [json[@"tag_name"] stringByReplacingOccurrencesOfString:@"v" withString:@""];
-                    completionHandler(version);
-                }
-            }
-        }
-    }];
+//                 if (!jsonError) {
+//                     NSString *version = [json[@"tag_name"] stringByReplacingOccurrencesOfString:@"v" withString:@""];
+//                     completionHandler(version);
+//                 }
+//             }
+//         }
+//     }];
 
-    [task resume];
-}
+//     [task resume];
+// }
 
 void fetchLatestTrollDecryptVersion(void (^completionHandler)(NSString *version)) {
-    github_fetchLatedVersion(@"donato-fiore/TrollDecrypt", completionHandler);
+    //github_fetchLatedVersion(@"donato-fiore/TrollDecrypt", completionHandler);
 }
 
 NSString *trollDecryptVersion(void) {

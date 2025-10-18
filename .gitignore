@@ -1,5 +1,10 @@
 .theos/
 packages/
-*.DS_Store
+.DS_Store
+*.deb
+obj/
+.theos
 Payload/
-TrollDecrypt.tipa
+*.tipa
+*.ipa
+

@@ -5,7 +5,7 @@
 	<key>platform-application</key>
 	<true/>
 	<key>application-identifier</key>
-	<string>com.fiore.trolldecrypt</string>
+	<string>com.trolldecrypt.jailbreak</string>
 	<key>com.apple.security.exception.files.absolute-path.read-write</key>
 	<array>
 		<string>/</string>
@@ -48,3 +48,4 @@
 	</array>
 </dict>
 </plist>
+
