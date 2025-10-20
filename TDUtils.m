@@ -120,13 +120,27 @@ void decryptApp(NSDictionary *app) {
             return;
         }
         
+        // Kill existing process if any
+        NSArray *processes;
+        NSLog(@"[trolldecrypt] kill existing process if any...");
+        processes = sysctl_ps();
+        for (NSDictionary *process in processes) {
+            NSString *proc_name = process[@"proc_name"];
+            if ([proc_name isEqualToString:binaryName]) {
+                pid_t pid = [process[@"pid"] intValue];
+                NSLog(@"[trolldecrypt] Found app PID: %d (existing)", pid);
+                kill(pid, SIGKILL);
+                break;
+            }
+        }
+        
         NSLog(@"[trolldecrypt] launch app and lldb force pause...");
         [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES]; // Launch app in suspended state
         sleep(2); // Wait for lldb to catch the app. TODO: monitor lldb output instead of sleep
         
         // Get PID after lldb caught it
         pid_t pid = -1;
-        NSArray *processes = sysctl_ps();
+        processes = sysctl_ps();
         for (NSDictionary *process in processes) {
             NSString *proc_name = process[@"proc_name"];
             if ([proc_name isEqualToString:binaryName]) {
