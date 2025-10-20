@@ -54,6 +54,20 @@ static BOOL updatesEnabled = NO;
     }
 }
 
+// iOS 15.x API
+-(BOOL)isMinimumOSVersion:(id)arg1 applicableToOSVersion:(id)arg2 error:(id*)arg3
+{
+    if ([self isWatchApp]) {
+        return %orig(arg1, arg2, arg3);
+    }
+    // NSLog(@"[TrollDecrypt] installd: arg1: %@ arg2: %@ arg3: %llu", arg1, arg2, arg3);
+    if (iosVersion != nil) {
+        return %orig(arg1, iosVersion, arg3);
+    } else {
+        return %orig(arg1, arg2, arg3);
+    }
+}
+
 %end
 
 %end
