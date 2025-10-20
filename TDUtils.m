@@ -121,7 +121,7 @@ void decryptApp(NSDictionary *app) {
         }
         
         NSLog(@"[trolldecrypt] launch app and lldb force pause...");
-        [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:NO];
+        [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES]; // Launch app in suspended state
         sleep(2); // Wait for lldb to catch the app
         
         // Get PID after lldb caught it
@@ -232,6 +232,10 @@ void detachLLDB(pid_t lldb_pid) {
         }
         
         NSLog(@"[trolldecrypt] lldb detached successfully");
+
+        // Reap the lldb process
+        int unused;
+        waitpid(lldb_pid, &unused, WNOHANG);
     }
 }
 
