@@ -167,13 +167,13 @@ pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
 
     NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_attach.txt"];
     NSString *scriptContent = [NSString stringWithFormat:
-        @"process attach --name %s --waitfor\n", executableName];
+        @"process attach --name '%s' --waitfor\n", executableName]; // TODO: shell-escape executableName
     [scriptContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     
     NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_output.log"];
 
     pid_t lldb_pid = 0;
-    const char *lldb_path = "/var/jb/usr/bin/lldb"; //please edit to use auto scheme for rootful/roothide, i'm lazy and forgot to do it
+    const char *lldb_path = "/var/jb/usr/bin/lldb"; // TODO: please edit to use auto scheme for rootful/roothide, i'm lazy and forgot to do it
     const char *args[] = {
         "lldb",
         "-s", [scriptPath UTF8String],  // Source script file
