@@ -122,7 +122,7 @@ void decryptApp(NSDictionary *app) {
         
         NSLog(@"[trolldecrypt] launch app and lldb force pause...");
         [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES]; // Launch app in suspended state
-        sleep(2); // Wait for lldb to catch the app
+        sleep(2); // Wait for lldb to catch the app. TODO: monitor lldb output instead of sleep
         
         // Get PID after lldb caught it
         pid_t pid = -1;
@@ -193,7 +193,7 @@ pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
         NSLog(@"[trolldecrypt] lldb spawned done, lldb PID: %d", lldb_pid);
         NSLog(@"[trolldecrypt] lldb output: %@", logPath);
         
-        sleep(2);
+        sleep(2); // Give lldb some time to launch. TODO: monitor lldb output instead of sleep
         
         // Verify lldb is still running
         if (kill(lldb_pid, 0) == 0) {
