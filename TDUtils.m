@@ -210,13 +210,6 @@ pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
     return lldb_pid;
 }
 
-//i was trying to make sure the app is paused before killed, but not success... can anyone help!?
-void continueLLDBProcess(pid_t lldb_pid) {
-    if (lldb_pid <= 0) return;
-    
-    NSLog(@"[trolldecrypt] 'continue' to lldb (PID: %d)", lldb_pid);
-}
-
 // Detach lldb from process
 void detachLLDB(pid_t lldb_pid) {
     if (lldb_pid > 0) {
@@ -285,9 +278,6 @@ void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t l
         NSLog(@"[trolldecrypt] Starting decryption while process is paused...");
         [dd createIPAFile:pid];
         NSLog(@"[trolldecrypt] Decryption complete!");
-
-        continueLLDBProcess(lldb_pid);
-        sleep(1); 
 
         NSLog(@"[trolldecrypt] Detaching lldb...");
         detachLLDB(lldb_pid);
