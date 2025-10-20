@@ -7,4 +7,5 @@ obj/
 Payload/
 *.tipa
 *.ipa
-
+.cache/
+compile_commands.json
