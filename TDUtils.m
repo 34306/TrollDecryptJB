@@ -2,6 +2,36 @@
 #import "TDDumpDecrypted.h"
 #import "LSApplicationProxy+AltList.h"
 
+static NSString *getLogPath(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_output.log"];
+}
+
+static BOOL waitForContentOfFileSync(NSString *filePath, NSString *content, NSTimeInterval timeout) {
+    int fd = open([filePath UTF8String], O_EVTONLY);
+    if (fd == -1) {
+        NSLog(@"[trolldecrypt] Failed to open file for monitoring: %@", filePath);
+        return NO;
+    }
+
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, fd, DISPATCH_VNODE_WRITE, queue);
+    dispatch_source_set_event_handler(source, ^{
+        NSString *fileContent = [NSString stringWithContentsOfFile:filePath encoding:NSUTF8StringEncoding error:nil];
+        if ([fileContent containsString:content]) {
+            NSLog(@"[trolldecrypt] File content matched: %@", filePath);
+            dispatch_semaphore_signal(semaphore);
+        }
+    });
+    dispatch_resume(source);
+
+    int rc = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)));
+    dispatch_source_cancel(source);
+    close(fd);
+
+    return (rc == 0);
+}
+
 UIWindow *alertWindow = NULL;
 UIWindow *kw = NULL;
 UIViewController *root = NULL;
@@ -136,7 +166,7 @@ void decryptApp(NSDictionary *app) {
         
         NSLog(@"[trolldecrypt] launch app and lldb force pause...");
         [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES]; // Launch app in suspended state
-        sleep(2); // Wait for lldb to catch the app. TODO: monitor lldb output instead of sleep
+        waitForContentOfFileSync(getLogPath(), @"Architecture set to", 30.0); // Wait for lldb to attach
         
         // Get PID after lldb caught it
         pid_t pid = -1;
@@ -183,8 +213,7 @@ pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
     NSString *scriptContent = [NSString stringWithFormat:
         @"process attach --name '%s' --waitfor\n", executableName]; // TODO: shell-escape executableName
     [scriptContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    
-    NSString *logPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_output.log"];
+    NSString *logPath = getLogPath();
 
     pid_t lldb_pid = 0;
     const char *lldb_path = "/var/jb/usr/bin/lldb"; // TODO: please edit to use auto scheme for rootful/roothide, i'm lazy and forgot to do it
@@ -207,7 +236,8 @@ pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
         NSLog(@"[trolldecrypt] lldb spawned done, lldb PID: %d", lldb_pid);
         NSLog(@"[trolldecrypt] lldb output: %@", logPath);
         
-        sleep(2); // Give lldb some time to launch. TODO: monitor lldb output instead of sleep
+        waitForContentOfFileSync(logPath, @"process attach --name", 5.0);
+        sleep(1); // Give lldb a moment to settle
         
         // Verify lldb is still running
         if (kill(lldb_pid, 0) == 0) {
