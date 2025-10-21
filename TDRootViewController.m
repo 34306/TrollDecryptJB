@@ -1,6 +1,7 @@
 #import "TDRootViewController.h"
 #import "TDFileManagerViewController.h"
 #import "TDUtils.h"
+#import "TDLowerInstallSettingsController.h"
 #import <spawn.h>
 #import <rootless.h>
 #import "appstoretrollerKiller/TSUtil.h"
@@ -18,7 +19,14 @@
     self.hookPrefs = [[NSUserDefaults alloc] initWithSuiteName:@"com.trolldecrypt.hook"];
     
     // Right button - info
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"info.circle"] style:UIBarButtonItemStylePlain target:self action:@selector(about:)];
+    // Create settings button
+    UIBarButtonItem *settingsButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gearshape"] style:UIBarButtonItemStylePlain target:self action:@selector(showLowerInstallSettings:)];
+    
+    // Create info button
+    UIBarButtonItem *infoButton = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"info.circle"] style:UIBarButtonItemStylePlain target:self action:@selector(about:)];
+    
+    // Set both buttons on the right side
+    self.navigationItem.rightBarButtonItems = @[infoButton, settingsButton];
     
     // Left button - folder
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"folder"] style:UIBarButtonItemStylePlain target:self action:@selector(openDocs:)];
@@ -69,7 +77,7 @@
     NSString *updatesStatus = updatesEnabled ? @"Enabled" : @"Disabled (buyProduct only)";
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"TrollDecrypt JB" 
-        message:[NSString stringWithFormat:@"Original by fiore\nModified by 34306 and khanhduytran0\nIcon by @super.user\nbfdecrypt by @bishopfox\ndumpdecrypted by @i0n1c\nUpdated for TrollStore by @wh1te4ever\nNathan and mineek for appstoretroller\n\n\nAppStore Spoof: %@\nSpoof iOS Version: %@\nShow Update (in AppStore): %@\n\nThis modified version support decrypt higher requirement iOS application.\nThanks to khanhduytran0, appstoretroller, lldb, modified by 34306.", hookStatus, iosVersion, updatesStatus]
+        message:[NSString stringWithFormat:@"Original by fiore\nModified by 34306 and khanhduytran0\nIcon by @super.user\nbfdecrypt by @bishopfox\ndumpdecrypted by @i0n1c\nUpdated for TrollStore by @wh1te4ever\nNathan and mineek for appstoretroller\n\n\nAppStore Spoof: %@\nSpoof iOS Version: %@\nForce Install Higher iOS Apps (require reboot): %@\n\nThis modified version support decrypt higher requirement iOS application.\nThanks to khanhduytran0, appstoretroller, flexdecrypt, modified by 34306.", hookStatus, iosVersion, updatesStatus]
         preferredStyle:UIAlertControllerStyleAlert];
     
     UIAlertAction *dismiss = [UIAlertAction actionWithTitle:@"Dismiss" style:UIAlertActionStyleCancel handler:nil];
@@ -87,7 +95,7 @@
                 [self setIOSVersion];
             }];
         
-        UIAlertAction *toggleUpdates = [UIAlertAction actionWithTitle:updatesEnabled ? @"Disable All Updates" : @"Enable All Updates" 
+        UIAlertAction *toggleUpdates = [UIAlertAction actionWithTitle:updatesEnabled ? @"Disable Force Install" : @"Enable Force Install" 
             style:UIAlertActionStyleDefault 
             handler:^(UIAlertAction *action) {
                 [self toggleUpdatesEnabled];
@@ -107,6 +115,12 @@
     
     [alert addAction:dismiss];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showLowerInstallSettings:(UIBarButtonItem *)sender {
+    TDLowerInstallSettingsController *settingsController = [[TDLowerInstallSettingsController alloc] init];
+    UINavigationController *navController = [[UINavigationController alloc] initWithRootViewController:settingsController];
+    [self presentViewController:navController animated:YES completion:nil];
 }
 
 - (void)toggleAppStoreHook {
@@ -189,7 +203,7 @@
     [self.hookPrefs setBool:newState forKey:@"updatesEnabled"];
     [self.hookPrefs synchronize];
     
-    NSString *status = newState ? @"All app updates will now be spoofed" : @"Only buyProduct requests will be spoofed";
+    NSString *status = newState ? @"Higher iOS requirement apps can now be force installed" : @"Only buyProduct requests will be spoofed";
     NSString *message = [NSString stringWithFormat:@"%@.\n\nApply to activate changes.", status];
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Updates Setting Changed" 
@@ -304,13 +318,13 @@
     if (indexPath.section == 0) {
         NSDictionary *app = self.apps[indexPath.row];
 
-        alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:[NSString stringWithFormat:@"Decrypt %@?", app[@"name"]] preferredStyle:UIAlertControllerStyleAlert];
+        alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:[NSString stringWithFormat:@"Decrypt %@ with FlexDecrypt?", app[@"name"]] preferredStyle:UIAlertControllerStyleAlert];
         UIAlertAction *cancel = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
-        UIAlertAction *decrypt = [UIAlertAction actionWithTitle:@"Yes" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIAlertAction *decryptAction = [UIAlertAction actionWithTitle:@"Decrypt" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             decryptApp(app);
         }];
 
-        [alert addAction:decrypt];
+        [alert addAction:decryptAction];
         [alert addAction:cancel];
     } else {
         alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:@"Enter PID to decrypt" preferredStyle:UIAlertControllerStyleAlert];

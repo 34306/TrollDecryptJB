@@ -1,36 +1,8 @@
 #import "TDUtils.h"
 #import "TDDumpDecrypted.h"
 #import "LSApplicationProxy+AltList.h"
-
-static NSString *getLogPath(void) {
-    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_output.log"];
-}
-
-static BOOL waitForContentOfFileSync(NSString *filePath, NSString *content, NSTimeInterval timeout) {
-    int fd = open([filePath UTF8String], O_EVTONLY);
-    if (fd == -1) {
-        NSLog(@"[trolldecrypt] Failed to open file for monitoring: %@", filePath);
-        return NO;
-    }
-
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
-    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, fd, DISPATCH_VNODE_WRITE, queue);
-    dispatch_source_set_event_handler(source, ^{
-        NSString *fileContent = [NSString stringWithContentsOfFile:filePath encoding:NSUTF8StringEncoding error:nil];
-        if ([fileContent containsString:content]) {
-            NSLog(@"[trolldecrypt] File content matched: %@", filePath);
-            dispatch_semaphore_signal(semaphore);
-        }
-    });
-    dispatch_resume(source);
-
-    int rc = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)));
-    dispatch_source_cancel(source);
-    close(fd);
-
-    return (rc == 0);
-}
+#import "SSZipArchive/SSZipArchive.h"
+#import "appstoretrollerKiller/TSUtil.h"
 
 UIWindow *alertWindow = NULL;
 UIWindow *kw = NULL;
@@ -101,14 +73,17 @@ NSArray *sysctl_ps(void) {
 }
 
 void decryptApp(NSDictionary *app) {
+    // Use flexdecrypt method instead of lldb
+    decryptAppWithFlexDecrypt(app);
+}
+
+void decryptAppWithFlexDecrypt(NSDictionary *app) {
     dispatch_async(dispatch_get_main_queue(), ^{
         alertWindow = [[UIWindow alloc] initWithFrame: [UIScreen mainScreen].bounds];
         alertWindow.rootViewController = [UIViewController new];
         alertWindow.windowLevel = UIWindowLevelAlert + 1;
         [alertWindow makeKeyAndVisible];
         
-        // Show a "Decrypting!" alert on the device and block the UI
-            
         kw = alertWindow;
         if([kw respondsToSelector:@selector(topmostPresentedViewController)])
             root = [kw performSelector:@selector(topmostPresentedViewController)];
@@ -117,10 +92,9 @@ void decryptApp(NSDictionary *app) {
         root.modalPresentationStyle = UIModalPresentationFullScreen;
     });
 
-    NSLog(@"[trolldecrypt] decrypt...");
+    NSLog(@"[trolldecrypt] decrypt with flexdecrypt...");
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-
         NSString *bundleID = app[@"bundleID"];
         NSString *name = app[@"name"];
         NSString *version = app[@"version"];
@@ -133,12 +107,43 @@ void decryptApp(NSDictionary *app) {
         NSLog(@"[trolldecrypt] executable: %@", executable);
         NSLog(@"[trolldecrypt] binaryName: %@", binaryName);
 
-        NSLog(@"[trolldecrypt] lldb --waitfor for '%@'...", binaryName);
-        pid_t lldb_pid = attachLLDBToProcessByName([binaryName UTF8String], -1);//-1 for unknown
+        // Show progress alert
+        dispatch_async(dispatch_get_main_queue(), ^{
+            alertController = [UIAlertController
+                alertControllerWithTitle:@"Decrypting with FlexDecrypt"
+                message:@"Please wait, this will take a few seconds..."
+                preferredStyle:UIAlertControllerStyleAlert];
+            [root presentViewController:alertController animated:YES completion:nil];
+        });
+
+        // Execute flexdecrypt
+        NSString *flexdecryptPath = [[NSBundle mainBundle] pathForResource:@"flexdecrypt_bin" ofType:nil];
+        if (!flexdecryptPath) {
+            flexdecryptPath = @"./flexdecrypt_bin"; // Fallback to current directory
+        }
         
-        if (lldb_pid <= 0) {
+        NSLog(@"[trolldecrypt] Using flexdecrypt at: %@", flexdecryptPath);
+        NSLog(@"[trolldecrypt] Decrypting binary: %@", executable);
+        
+        // Run flexdecrypt command
+        NSString *stdOut = nil;
+        NSString *stdErr = nil;
+        int result = spawnRoot(flexdecryptPath, @[executable], &stdOut, &stdErr);
+        
+        NSLog(@"[trolldecrypt] flexdecrypt result: %d", result);
+        if (stdOut && stdOut.length > 0) {
+            NSLog(@"[trolldecrypt] stdout: %@", stdOut);
+        }
+        if (stdErr && stdErr.length > 0) {
+            NSLog(@"[trolldecrypt] stderr: %@", stdErr);
+        }
+        
+        if (result != 0) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                errorController = [UIAlertController alertControllerWithTitle:@"Error: lldb" message:@"Failed to start lldb. Make sure lldb is installed." preferredStyle:UIAlertControllerStyleAlert];
+                [alertController dismissViewControllerAnimated:NO completion:nil];
+                errorController = [UIAlertController alertControllerWithTitle:@"FlexDecrypt Error" 
+                    message:[NSString stringWithFormat:@"FlexDecrypt failed with error %d. stderr: %@", result, stdErr] 
+                    preferredStyle:UIAlertControllerStyleAlert];
                 UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                     [errorController dismissViewControllerAnimated:NO completion:nil];
                     [kw removeFromSuperview];
@@ -150,213 +155,34 @@ void decryptApp(NSDictionary *app) {
             return;
         }
         
-        // Kill existing process if any
-        NSArray *processes;
-        NSLog(@"[trolldecrypt] kill existing process if any...");
-        processes = sysctl_ps();
-        for (NSDictionary *process in processes) {
-            NSString *proc_name = process[@"proc_name"];
-            if ([proc_name isEqualToString:binaryName]) {
-                pid_t pid = [process[@"pid"] intValue];
-                NSLog(@"[trolldecrypt] Found app PID: %d (existing)", pid);
-                kill(pid, SIGKILL);
-                break;
-            }
-        }
+        // Find the decrypted file in /tmp
+        NSString *decryptedPath = [NSString stringWithFormat:@"/tmp/%@", binaryName];
+        NSFileManager *fm = [NSFileManager defaultManager];
         
-        NSLog(@"[trolldecrypt] launch app and lldb force pause...");
-        [[UIApplication sharedApplication] launchApplicationWithIdentifier:bundleID suspended:YES]; // Launch app in suspended state
-        waitForContentOfFileSync(getLogPath(), @"Architecture set to", 30.0); // Wait for lldb to attach
-        
-        // Get PID after lldb caught it
-        pid_t pid = -1;
-        processes = sysctl_ps();
-        for (NSDictionary *process in processes) {
-            NSString *proc_name = process[@"proc_name"];
-            if ([proc_name isEqualToString:binaryName]) {
-                pid = [process[@"pid"] intValue];
-                NSLog(@"[trolldecrypt] Found app PID: %d (paused by lldb)", pid);
-                break;
-            }
-        }
-
-        if (pid == -1) {
+        if (![fm fileExistsAtPath:decryptedPath]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [alertController dismissViewControllerAnimated:NO completion:nil];
-                NSLog(@"[trolldecrypt] failed to get pid for binary name: %@", binaryName);
-
-                errorController = [UIAlertController alertControllerWithTitle:@"Error: -1" message:[NSString stringWithFormat:@"Failed to get PID for binary name: %@", binaryName] preferredStyle:UIAlertControllerStyleAlert];
-                UIAlertAction *okAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"Ok") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    NSLog(@"[trolldecrypt] Ok action");
+                errorController = [UIAlertController alertControllerWithTitle:@"FlexDecrypt Error" 
+                    message:[NSString stringWithFormat:@"Decrypted file not found at: %@", decryptedPath] 
+                    preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                     [errorController dismissViewControllerAnimated:NO completion:nil];
                     [kw removeFromSuperview];
                     kw.hidden = YES;
                 }];
-
                 [errorController addAction:okAction];
                 [root presentViewController:errorController animated:YES completion:nil];
             });
-
             return;
         }
-
-        NSLog(@"[trolldecrypt] pid: %d", pid);
-
-        bfinject_rocknroll(pid, name, version, lldb_pid);
+        
+        NSLog(@"[trolldecrypt] Found decrypted file at: %@", decryptedPath);
+        
+        // Create IPA with decrypted binary
+        createIPAWithFlexDecrypt(app, decryptedPath);
     });
 }
 
-pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid) {
-    NSLog(@"[trolldecrypt] Attaching lldb to executable: %s (PID: %d)", executableName, target_pid);
-
-    NSString *scriptPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"lldb_attach.txt"];
-    NSString *scriptContent = [NSString stringWithFormat:
-        @"process attach --name '%s' --waitfor\n", executableName]; // TODO: shell-escape executableName
-    [scriptContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    NSString *logPath = getLogPath();
-
-    pid_t lldb_pid = 0;
-    const char *lldb_path = "/var/jb/usr/bin/lldb"; // TODO: please edit to use auto scheme for rootful/roothide, i'm lazy and forgot to do it
-    const char *args[] = {
-        "lldb",
-        "-s", [scriptPath UTF8String],  // Source script file
-        NULL
-    };
-    
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, [logPath UTF8String], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, [logPath UTF8String], O_WRONLY | O_CREAT | O_APPEND, 0644);
-    
-    int status = posix_spawn(&lldb_pid, lldb_path, &actions, NULL, (char *const *)args, NULL);
-    posix_spawn_file_actions_destroy(&actions);
-    
-    if (status == 0) {
-        NSLog(@"[trolldecrypt] lldb spawned done, lldb PID: %d", lldb_pid);
-        NSLog(@"[trolldecrypt] lldb output: %@", logPath);
-        
-        waitForContentOfFileSync(logPath, @"process attach --name", 5.0);
-        sleep(1); // Give lldb a moment to settle
-        
-        // Verify lldb is still running
-        if (kill(lldb_pid, 0) == 0) {
-            NSLog(@"[trolldecrypt] lldb attached to '%s' (PID: %d)", executableName, target_pid);
-        } else {
-            NSLog(@"[trolldecrypt] lldb process died");
-            lldb_pid = 0;
-        }
-    } else {
-        NSLog(@"[trolldecrypt] fail to spawn lldb: %d", status);
-        lldb_pid = 0;
-    }
-    
-    return lldb_pid;
-}
-
-// Detach lldb from process
-void detachLLDB(pid_t lldb_pid) {
-    if (lldb_pid > 0) {
-        NSLog(@"[trolldecrypt] Detaching lldb (PID: %d)", lldb_pid);
-
-        kill(lldb_pid, SIGTERM);
-        
-        sleep(1);
-      
-        if (kill(lldb_pid, 0) == 0) {
-            NSLog(@"[trolldecrypt] lldb still running, sending SIGKILL");
-            kill(lldb_pid, SIGKILL);
-        }
-        
-        NSLog(@"[trolldecrypt] lldb detached successfully");
-
-        // Reap the lldb process
-        int unused;
-        waitpid(lldb_pid, &unused, WNOHANG);
-    }
-}
-
-void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t lldb_pid) {
-    NSLog(@"[trolldecrypt] decrypt...");
-    
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{;
-        NSLog(@"[trolldecrypt] Process PID: %d, lldb PID: %d", pid, lldb_pid);
-
-		// Get full path
-		char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
-        proc_pidpath(pid, pathbuf, sizeof(pathbuf));
-		const char *fullPathStr = pathbuf;
-
-        NSLog(@"[trolldecrypt] fullPathStr: %s", fullPathStr);
-        NSLog(@"[trolldecrypt] Process is already PAUSED by lldb");
-        
-        DumpDecrypted *dd = [[DumpDecrypted alloc] initWithPathToBinary:[NSString stringWithUTF8String:fullPathStr] appName:appName appVersion:version];
-        if(!dd) {
-            NSLog(@"[trolldecrypt] ERROR: failed to get DumpDecrypted instance");
-            return;
-        }
-
-        NSLog(@"[trolldecrypt] Full path to app: %s   ///   IPA File: %@", fullPathStr, [dd IPAPath]);
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            alertWindow = [[UIWindow alloc] initWithFrame: [UIScreen mainScreen].bounds];
-            alertWindow.rootViewController = [UIViewController new];
-            alertWindow.windowLevel = UIWindowLevelAlert + 1;
-            [alertWindow makeKeyAndVisible];
-            
-            // Show a "Decrypting!" alert on the device and block the UI
-            alertController = [UIAlertController
-                alertControllerWithTitle:@"Decrypting"
-                message:@"Please wait, this will take a few seconds..."
-                preferredStyle:UIAlertControllerStyleAlert];
-                
-            kw = alertWindow;
-            if([kw respondsToSelector:@selector(topmostPresentedViewController)])
-                root = [kw performSelector:@selector(topmostPresentedViewController)];
-            else
-                root = [kw rootViewController];
-            root.modalPresentationStyle = UIModalPresentationFullScreen;
-            [root presentViewController:alertController animated:YES completion:nil];
-        });
-        
-        NSLog(@"[trolldecrypt] Starting decryption while process is paused...");
-        [dd createIPAFile:pid];
-        NSLog(@"[trolldecrypt] Decryption complete!");
-
-        NSLog(@"[trolldecrypt] Detaching lldb...");
-        detachLLDB(lldb_pid);
-
-        // Dismiss the alert box
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [alertController dismissViewControllerAnimated:NO completion:nil];
-
-            doneController = [UIAlertController alertControllerWithTitle:@"Decryption Complete!" message:[NSString stringWithFormat:@"IPA file saved to:\n%@\n\nThanks to lldb so we can archive this!", [dd IPAPath]] preferredStyle:UIAlertControllerStyleAlert];
-
-            UIAlertAction *okAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"Ok") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                [kw removeFromSuperview];
-                kw.hidden = YES;
-            }];
-            [doneController addAction:okAction];
-
-            if ([[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:@"filza://"]]) {
-                UIAlertAction *openAction = [UIAlertAction actionWithTitle:@"Show in Filza" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    [kw removeFromSuperview];
-                    kw.hidden = YES;
-
-                    NSString *urlString = [NSString stringWithFormat:@"filza://view%@", [dd IPAPath]];
-                    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:urlString] options:@{} completionHandler:nil];
-                }];
-                [doneController addAction:openAction];
-            }
-
-            [root presentViewController:doneController animated:YES completion:nil];
-        }); // dispatch on main
-                    
-        NSLog(@"[trolldecrypt] Over and out.");
-    }); // dispatch in background
-    
-    NSLog(@"[trolldecrypt] All done.");
-}
 
 NSArray *decryptedFileList(void) {
     NSMutableArray *files = [NSMutableArray array];
@@ -518,4 +344,167 @@ void fetchLatestTrollDecryptVersion(void (^completionHandler)(NSString *version)
 
 NSString *trollDecryptVersion(void) {
     return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"];
+}
+
+void createIPAWithFlexDecrypt(NSDictionary *app, NSString *decryptedBinaryPath) {
+    NSString *name = app[@"name"];
+    NSString *version = app[@"version"];
+    NSString *executable = app[@"executable"];
+    NSString *binaryName = [executable lastPathComponent];
+    
+    // Get app path
+    NSString *appPath = [executable stringByDeletingLastPathComponent];
+    NSString *docPathStr = docPath();
+    
+    // Create IPA structure
+    NSString *ipaDir = [NSString stringWithFormat:@"%@/ipa", docPathStr];
+    NSString *payloadDir = [NSString stringWithFormat:@"%@/Payload", ipaDir];
+    NSString *appDirName = [appPath lastPathComponent];
+    NSString *appCopyDir = [NSString stringWithFormat:@"%@/%@", payloadDir, appDirName];
+    NSString *ipaFile = [NSString stringWithFormat:@"%@/%@_%@_decrypted.ipa", docPathStr, name, version];
+    
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSError *error;
+    
+    // Clean up previous files
+    [fm removeItemAtPath:ipaFile error:nil];
+    [fm removeItemAtPath:ipaDir error:nil];
+    
+    // Ensure app copy directory doesn't exist - force remove with error checking
+    if ([fm fileExistsAtPath:appCopyDir]) {
+        NSLog(@"[trolldecrypt] Removing existing app copy directory: %@", appCopyDir);
+        NSError *removeError;
+        [fm removeItemAtPath:appCopyDir error:&removeError];
+        if (removeError) {
+            NSLog(@"[trolldecrypt] Warning: Could not remove existing directory: %@", removeError);
+        }
+    }
+    
+    // Create directories
+    [fm createDirectoryAtPath:appCopyDir withIntermediateDirectories:YES attributes:nil error:&error];
+    if (error) {
+        NSLog(@"[trolldecrypt] Error creating app copy directory: %@", error);
+        return;
+    }
+    
+    NSLog(@"[trolldecrypt] Copying app from %@ to %@", appPath, appCopyDir);
+    
+    // Copy entire app directory
+    [fm copyItemAtPath:appPath toPath:appCopyDir error:&error];
+    if (error) {
+        NSLog(@"[trolldecrypt] Error copying app directory: %@", error);
+        // Try alternative approach - copy contents instead of directory
+        NSLog(@"[trolldecrypt] Trying alternative copy approach...");
+        [fm removeItemAtPath:appCopyDir error:nil];
+        [fm createDirectoryAtPath:appCopyDir withIntermediateDirectories:YES attributes:nil error:nil];
+        
+        // Get all items in the source app directory
+        NSArray *sourceItems = [fm contentsOfDirectoryAtPath:appPath error:nil];
+        for (NSString *item in sourceItems) {
+            NSString *sourceItemPath = [appPath stringByAppendingPathComponent:item];
+            NSString *destItemPath = [appCopyDir stringByAppendingPathComponent:item];
+            [fm copyItemAtPath:sourceItemPath toPath:destItemPath error:nil];
+        }
+        NSLog(@"[trolldecrypt] Alternative copy approach completed");
+    }
+    
+    // Replace the executable with decrypted version
+    NSString *targetExecutable = [appCopyDir stringByAppendingPathComponent:binaryName];
+    
+    // Force remove existing executable
+    if ([fm fileExistsAtPath:targetExecutable]) {
+        NSLog(@"[trolldecrypt] Removing existing executable: %@", targetExecutable);
+        NSError *removeError;
+        [fm removeItemAtPath:targetExecutable error:&removeError];
+        if (removeError) {
+            NSLog(@"[trolldecrypt] Warning: Could not remove existing executable: %@", removeError);
+        }
+    }
+    
+    // Copy decrypted executable
+    [fm copyItemAtPath:decryptedBinaryPath toPath:targetExecutable error:&error];
+    if (error) {
+        NSLog(@"[trolldecrypt] Error replacing executable: %@", error);
+        // Try alternative approach - use NSData to force overwrite
+        NSLog(@"[trolldecrypt] Trying alternative executable replacement...");
+        NSData *decryptedData = [NSData dataWithContentsOfFile:decryptedBinaryPath];
+        if (decryptedData) {
+            BOOL writeSuccess = [decryptedData writeToFile:targetExecutable atomically:YES];
+            if (writeSuccess) {
+                NSLog(@"[trolldecrypt] Alternative executable replacement successful");
+                error = nil; // Clear error since we succeeded
+            } else {
+                NSLog(@"[trolldecrypt] Alternative executable replacement failed");
+            }
+        } else {
+            NSLog(@"[trolldecrypt] Could not read decrypted data");
+        }
+        
+        if (error) {
+            return;
+        }
+    }
+    
+    NSLog(@"[trolldecrypt] Replaced executable with decrypted version");
+    
+    // Create IPA file
+    NSLog(@"[trolldecrypt] Creating IPA file: %@", ipaFile);
+    BOOL success = [SSZipArchive createZipFileAtPath:ipaFile 
+                                withContentsOfDirectory:ipaDir
+                                keepParentDirectory:NO 
+                                compressionLevel:1
+                                password:nil
+                                AES:NO
+                                progressHandler:nil];
+    
+    if (success) {
+        NSLog(@"[trolldecrypt] IPA created successfully: %@", ipaFile);
+        
+        // Clean up temporary files
+        [fm removeItemAtPath:ipaDir error:nil];
+        
+        // Show success message
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [alertController dismissViewControllerAnimated:NO completion:nil];
+            
+            doneController = [UIAlertController alertControllerWithTitle:@"FlexDecrypt Complete!" 
+                message:[NSString stringWithFormat:@"IPA file saved to:\n%@\n\nDecrypted using FlexDecrypt!", ipaFile] 
+                preferredStyle:UIAlertControllerStyleAlert];
+            
+            UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                [kw removeFromSuperview];
+                kw.hidden = YES;
+            }];
+            [doneController addAction:okAction];
+            
+            if ([[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:@"filza://"]]) {
+                UIAlertAction *openAction = [UIAlertAction actionWithTitle:@"Show in Filza" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    [kw removeFromSuperview];
+                    kw.hidden = YES;
+                    
+                    NSString *urlString = [NSString stringWithFormat:@"filza://view%@", ipaFile];
+                    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:urlString] options:@{} completionHandler:nil];
+                }];
+                [doneController addAction:openAction];
+            }
+            
+            [root presentViewController:doneController animated:YES completion:nil];
+        });
+    } else {
+        NSLog(@"[trolldecrypt] Failed to create IPA file");
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [alertController dismissViewControllerAnimated:NO completion:nil];
+            errorController = [UIAlertController alertControllerWithTitle:@"FlexDecrypt Error" 
+                message:@"Failed to create IPA file" 
+                preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                [errorController dismissViewControllerAnimated:NO completion:nil];
+                [kw removeFromSuperview];
+                kw.hidden = YES;
+            }];
+            [errorController addAction:okAction];
+            [root presentViewController:errorController animated:YES completion:nil];
+        });
+    }
 }
