@@ -41,7 +41,6 @@ void decryptApp(NSDictionary *app);
 void decryptAppWithPID(pid_t pid);
 void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t lldb_pid);
 pid_t attachLLDBToProcessByName(const char *executableName, pid_t target_pid);
-void continueLLDBProcess(pid_t lldb_pid);
 void detachLLDB(pid_t lldb_pid);
 NSArray *decryptedFileList(void);
 NSString *docPath(void);
