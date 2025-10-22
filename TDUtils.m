@@ -320,8 +320,13 @@ void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t l
         });
         
         NSLog(@"[trolldecrypt] Starting decryption while process is paused...");
-        [dd createIPAFile:pid];
-        NSLog(@"[trolldecrypt] Decryption complete!");
+        BOOL success = [dd createIPAFile:pid];
+
+        if (success) {
+            NSLog(@"[trolldecrypt] Decryption complete!");
+        } else {
+            NSLog(@"[trolldecrypt] Decryption failed due to process termination!");
+        }
 
         NSLog(@"[trolldecrypt] Detaching lldb...");
         detachLLDB(lldb_pid);
@@ -330,15 +335,18 @@ void bfinject_rocknroll(pid_t pid, NSString *appName, NSString *version, pid_t l
         dispatch_async(dispatch_get_main_queue(), ^{
             [alertController dismissViewControllerAnimated:NO completion:nil];
 
-            doneController = [UIAlertController alertControllerWithTitle:@"Decryption Complete!" message:[NSString stringWithFormat:@"IPA file saved to:\n%@\n\nThanks to lldb so we can archive this!", [dd IPAPath]] preferredStyle:UIAlertControllerStyleAlert];
-
+            if (success) {
+                doneController = [UIAlertController alertControllerWithTitle:@"Decryption Complete!" message:[NSString stringWithFormat:@"IPA file saved to:\n%@\n\nThanks to lldb so we can archive this!", [dd IPAPath]] preferredStyle:UIAlertControllerStyleAlert];
+            } else {
+                doneController = [UIAlertController alertControllerWithTitle:@"Decryption Failed" message:@"Target process terminated during decryption. Please try again." preferredStyle:UIAlertControllerStyleAlert];
+            }
             UIAlertAction *okAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"Ok") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                 [kw removeFromSuperview];
                 kw.hidden = YES;
             }];
             [doneController addAction:okAction];
 
-            if ([[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:@"filza://"]]) {
+            if (success && [[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:@"filza://"]]) {
                 UIAlertAction *openAction = [UIAlertAction actionWithTitle:@"Show in Filza" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                     [kw removeFromSuperview];
                     kw.hidden = YES;
