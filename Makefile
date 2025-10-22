@@ -16,7 +16,7 @@ TrollDecrypt_FRAMEWORKS = UIKit CoreGraphics MobileCoreServices
 TrollDecrypt_CFLAGS = -fobjc-arc
 TrollDecrypt_CODESIGN_FLAGS = -Sentitlements.plist
 TrollDecrypt_INSTALL_PATH = /Applications
-TrollDecrypt_BUNDLE_RESOURCES = flexdecrypt_bin
+TrollDecrypt_BUNDLE_RESOURCES = flexdecrypt_bin dlopentool
 
 # Tweak files (hooks into appstored)
 TrollDecryptHook_FILES = TweakHook14.xm TweakHook16.xm
@@ -29,10 +29,14 @@ TDDaemonKiller_CFLAGS = -fobjc-arc
 TDDaemonKiller_CODESIGN_FLAGS = -SappstoretrollerKiller/entitlements.plist
 TDDaemonKiller_INSTALL_PATH = /usr/local/bin
 
-# dlopen tool
+# dlopen tool - compile and bundle with app
 DLOPEN_TOOL_NAME = dlopentool
 DLOPEN_TOOL_FILES = dlopentool.c
 DLOPEN_TOOL_INSTALL_PATH = /usr/local/bin
+
+# Ensure dlopentool is compiled before bundling
+before-TrollDecrypt-stage::
+	@$(MAKE) dlopentool
 
 include $(THEOS_MAKE_PATH)/application.mk
 include $(THEOS_MAKE_PATH)/tweak.mk
