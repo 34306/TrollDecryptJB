@@ -318,13 +318,17 @@
     if (indexPath.section == 0) {
         NSDictionary *app = self.apps[indexPath.row];
 
-        alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:[NSString stringWithFormat:@"Decrypt %@ with FlexDecrypt?", app[@"name"]] preferredStyle:UIAlertControllerStyleAlert];
+        alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:[NSString stringWithFormat:@"Choose decryption method for %@:", app[@"name"]] preferredStyle:UIAlertControllerStyleAlert];
         UIAlertAction *cancel = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
-        UIAlertAction *decryptAction = [UIAlertAction actionWithTitle:@"Decrypt" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIAlertAction *decryptMainAction = [UIAlertAction actionWithTitle:@"Decrypt Main Binary" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             decryptApp(app);
         }];
+        UIAlertAction *decryptIPAAction = [UIAlertAction actionWithTitle:@"Decrypt IPA" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            decryptAllMachOInApp(app);
+        }];
 
-        [alert addAction:decryptAction];
+        [alert addAction:decryptMainAction];
+        [alert addAction:decryptIPAAction];
         [alert addAction:cancel];
     } else {
         alert = [UIAlertController alertControllerWithTitle:@"Decrypt" message:@"Enter PID to decrypt" preferredStyle:UIAlertControllerStyleAlert];

@@ -576,8 +576,13 @@ int find_off_cryptid(const char *filePath) {
 	NSLog(@"[trolldecrypt] appCopyDir: %@", appCopyDir);
 	NSLog(@"[trolldecrypt] zipDir: %@", zipDir);
 	
-	[fm copyItemAtPath:appDir toPath:appCopyDir error:&err];
+	BOOL copySuccess = [fm copyItemAtPath:appDir toPath:appCopyDir error:&err];
 	NSLog(@"[trolldecrypt] ======== END OF FILE COPY ========");
+	
+	if (!copySuccess) {
+		NSLog(@"[trolldecrypt] Error copying app directory: %@", err.localizedDescription);
+		// The file manager delegate should handle this, but log it for debugging
+	}
     // sleep(1);
     // exit(1);
 	// Replace encrypted binaries with decrypted versions
