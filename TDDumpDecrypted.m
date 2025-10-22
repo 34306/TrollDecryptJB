@@ -556,7 +556,7 @@ int find_off_cryptid(const char *filePath) {
 	return [NSString stringWithFormat:@"%@/%@_%@_decrypted.ipa", [self docPath], self.appName, self.appVersion];
 }
 
--(void) createIPAFile:(pid_t)pid {
+- (BOOL)createIPAFile:(pid_t)pid {
 	NSString *IPAFile = [self IPAPath];
 	NSString *appDir  = [self appPath];
 	NSString *appCopyDir = [NSString stringWithFormat:@"%@/ipa/Payload/%s", [self docPath], self->appDirName];
@@ -569,15 +569,28 @@ int find_off_cryptid(const char *filePath) {
 	[fm createDirectoryAtPath:appCopyDir withIntermediateDirectories:true attributes:nil error:nil];
 
 	[fm setDelegate:(id<NSFileManagerDelegate>)self];
-
+	// check pid alive before copy
+	if (kill(pid, 0) != 0) {
+		NSLog(@"[trolldecrypt] ERROR: Target process %d is not running. Aborting.", pid);
+		return NO;
+	} else {
+		NSLog(@"[trolldecrypt] Target process %d is running. Proceeding with file copy.", pid);
+	}
 	NSLog(@"[trolldecrypt] ======== START FILE COPY - IGNORE ANY SANDBOX WARNINGS ========");
 	NSLog(@"[trolldecrypt] IPAFile: %@", IPAFile);
 	NSLog(@"[trolldecrypt] appDir: %@", appDir);
 	NSLog(@"[trolldecrypt] appCopyDir: %@", appCopyDir);
 	NSLog(@"[trolldecrypt] zipDir: %@", zipDir);
-	
+
 	[fm copyItemAtPath:appDir toPath:appCopyDir error:&err];
 	NSLog(@"[trolldecrypt] ======== END OF FILE COPY ========");
+	// check pid alive after copy
+	if (kill(pid, 0) != 0) {
+		NSLog(@"[trolldecrypt] ERROR: Target process %d exited during file copy. Aborting.", pid);
+		return NO;
+	} else {
+		NSLog(@"[trolldecrypt] Target process %d is still running after file copy. Proceeding with decryption.", pid);
+	}
     // sleep(1);
     // exit(1);
 	// Replace encrypted binaries with decrypted versions
@@ -610,7 +623,7 @@ int find_off_cryptid(const char *filePath) {
 	[fm removeItemAtPath:zipDir error:nil];
 
 	NSLog(@"[trolldecrypt] ======== Wrote %@ ========", [self IPAPath]);
-	return;
+	return YES;
 }
 
 @end
